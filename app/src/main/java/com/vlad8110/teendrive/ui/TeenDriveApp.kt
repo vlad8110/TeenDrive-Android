@@ -27,7 +27,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Groups
@@ -363,6 +362,13 @@ private fun TeenDriveNavShell(
                                 restoreState = true
                             }
                         },
+                        onOpenReports = {
+                            navController.navigate(Screen.TeenReports.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
                     )
                 }
                 composable(Screen.TeenDrive.route) {
@@ -405,6 +411,7 @@ private fun TeenDriveTopBar(
 private fun TeenHomeScreen(
     accountState: AccountState,
     onOpenProfile: () -> Unit,
+    onOpenReports: () -> Unit,
 ) {
     val context = LocalContext.current
     val tripRepository = remember {
@@ -418,6 +425,19 @@ private fun TeenHomeScreen(
     val lastDriveMinutes = lastTrip?.duration?.toMinutes() ?: 0
     val parentConnected = accountState.connectedParents.isNotEmpty()
     val focusArea = focusAreaForTrips(trips)
+    var isDriveTracking by remember { mutableStateOf(ActiveDriveTrackingService.isRunning) }
+    var activeDriveSnapshot by remember { mutableStateOf<ActiveDriveSnapshot?>(ActiveDriveTrackingService.activeDriveSnapshot) }
+    var driveClockNow by remember { mutableStateOf(Instant.now()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            isDriveTracking = ActiveDriveTrackingService.isRunning
+            activeDriveSnapshot = ActiveDriveTrackingService.activeDriveSnapshot
+            driveClockNow = Instant.now()
+            delay(1_000)
+        }
+    }
+
     HomeScreenColumn {
         HomeScoreHero(score = latestScore, hasTrip = lastTrip != null)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -460,10 +480,52 @@ private fun TeenHomeScreen(
                 modifier = Modifier.weight(1f),
             )
         }
-        QuickInsightsCard(
-            trips = trips,
-            modifier = Modifier.weight(1f),
+        if (isDriveTracking) {
+            LiveDriveReportCard(
+                snapshot = activeDriveSnapshot,
+                isDriveTracking = true,
+                now = driveClockNow,
+                modifier = Modifier.weight(1f),
+            )
+        } else if (lastTrip != null) {
+            TripRow(
+                trip = lastTrip,
+                onClick = onOpenReports,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            NoLastReportCard(
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NoLastReportCard(modifier: Modifier = Modifier) {
+    GlassCard(modifier = modifier) {
+        Spacer(Modifier.weight(1f))
+        Icon(
+            Icons.Filled.DirectionsCar,
+            contentDescription = null,
+            tint = TeenGreen,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .size(36.dp),
         )
+        Text(
+            "No Trips",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Text(
+            "Start a drive to save the first route.",
+            color = MutedHomeText,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Spacer(Modifier.weight(1f))
     }
 }
 
@@ -600,43 +662,6 @@ private fun ParentConnectionCard(
 }
 
 @Composable
-private fun QuickInsightsCard(
-    trips: List<TeenTrip>,
-    modifier: Modifier = Modifier,
-) {
-    val bestScore = trips.maxOfOrNull { it.behaviorScoreBreakdown.score } ?: 100
-    GlassCard(modifier = modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Quick Insights", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                InsightRow("No harsh braking on your last 3 trips.")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    InsightRow("Best drive this week: ")
-                    Text(bestScore.toString(), color = TeenGreen, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .border(2.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(14.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = TeenGreen, modifier = Modifier.size(38.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun InsightRow(text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = TeenGreen, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        Text(text, color = MutedHomeText, style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
-@Composable
 private fun DriveDashboardScreen(accountState: AccountState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -723,7 +748,7 @@ private fun DriveDashboardScreen(accountState: AccountState) {
                 }
             },
         )
-        DriveStatsStrip(
+        LiveDriveReportCard(
             snapshot = activeDriveSnapshot,
             isDriveTracking = isDriveTracking,
             now = driveClockNow,
@@ -1037,10 +1062,11 @@ private fun SpeedOverlay(
 }
 
 @Composable
-private fun DriveStatsStrip(
+private fun LiveDriveReportCard(
     snapshot: ActiveDriveSnapshot?,
     isDriveTracking: Boolean = false,
     now: Instant = Instant.now(),
+    modifier: Modifier = Modifier,
 ) {
     val durationText = snapshot?.let {
         if (isDriveTracking) {
@@ -1049,27 +1075,44 @@ private fun DriveStatsStrip(
             it.duration.driveDurationText()
         }
     } ?: "0:00"
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xE52B302E))
-            .border(1.dp, Color(0x445C6964), RoundedCornerShape(8.dp)),
-    ) {
-        DriveStripMetric("Safety Score", snapshot?.let { 100 - (it.safetyAlerts.size * 5) }?.coerceIn(0, 100)?.toString() ?: "100", "Great", Modifier.weight(1f))
-        DriveStripMetric("Distance", snapshot?.distanceMiles?.oneDecimal() ?: "0.0", "mi", Modifier.weight(1f))
-        DriveStripMetric("Duration", durationText, "", Modifier.weight(1f))
-    }
-}
+    val alerts = snapshot?.safetyAlerts.orEmpty().filter { it.kind.countsAsSafetyAlert }
+    val score = (100 - (alerts.size * 5)).coerceIn(0, 100)
 
-@Composable
-private fun DriveStripMetric(title: String, value: String, unit: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(title, color = Color(0xFFB9C1BE), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-        Text(if (unit.isBlank()) value else "$value $unit", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+    GlassCard(modifier = modifier) {
+        Text(
+            if (isDriveTracking) "Live Drive" else "Ready to drive",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ReportInlineMetric(Icons.Filled.VerifiedUser, "$score score")
+            ReportInlineMetric(Icons.Filled.Navigation, "${snapshot?.distanceMiles?.oneDecimal() ?: "0.0"} mi")
+            ReportInlineMetric(Icons.Filled.Speed, durationText)
+            ReportInlineMetric(Icons.Filled.Speed, "${snapshot?.topSpeedMph?.toInt() ?: 0} mph")
+        }
+        if (alerts.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${alerts.size} live safety alert${if (alerts.size == 1) "" else "s"}",
+                    color = Color(0xFFFFB74D),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+        SafetyAlertStrip(
+            speedLimit = alerts.count { it.kind == SafetyAlertKind.SPEED_LIMIT },
+            rapid = alerts.count { it.kind == SafetyAlertKind.RAPID_ACCELERATION },
+            stop = alerts.count { it.kind == SafetyAlertKind.HARSH_STOP },
+            corner = alerts.count { it.kind == SafetyAlertKind.HARSH_CORNERING },
+            phone = alerts.count { it.kind == SafetyAlertKind.PHONE_USE },
+            night = alerts.count { it.kind == SafetyAlertKind.NIGHT_DRIVING },
+        )
     }
 }
 
@@ -1174,42 +1217,39 @@ private fun TripListScreen(
 }
 
 @Composable
-private fun TripRow(trip: TeenTrip, onClick: () -> Unit) {
-    GlassCard(modifier = Modifier.clickable(onClick = onClick)) {
-        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    trip.startedAt.toLocalReportText(),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ReportInlineMetric(Icons.Filled.Navigation, "${trip.distanceMiles.oneDecimal()} mi")
-                    ReportInlineMetric(Icons.Filled.Speed, "${trip.duration.driveDurationText()}")
-                    ReportInlineMetric(Icons.Filled.Speed, "${trip.topSpeedMph.toInt()} mph")
-                }
-                if (trip.safetyAlertCount > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "${trip.safetyAlertCount} safety alert${if (trip.safetyAlertCount == 1) "" else "s"}",
-                            color = Color(0xFFFFB74D),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-                SafetyAlertStrip(trip)
-            }
-            OutlinedButton(
-                onClick = onClick,
+private fun TripRow(
+    trip: TeenTrip,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    GlassCard(modifier = modifier.clickable(onClick = onClick)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                trip.startedAt.toLocalReportText(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Open")
+                ReportInlineMetric(Icons.Filled.Navigation, "${trip.distanceMiles.oneDecimal()} mi")
+                ReportInlineMetric(Icons.Filled.Speed, trip.duration.driveDurationText())
+                ReportInlineMetric(Icons.Filled.Speed, "${trip.topSpeedMph.toInt()} mph")
             }
+            if (trip.safetyAlertCount > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "${trip.safetyAlertCount} safety alert${if (trip.safetyAlertCount == 1) "" else "s"}",
+                        color = Color(0xFFFFB74D),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            SafetyAlertStrip(trip)
         }
     }
 }
@@ -1225,6 +1265,25 @@ private fun ReportInlineMetric(icon: ImageVector, text: String) {
 
 @Composable
 private fun SafetyAlertStrip(trip: TeenTrip) {
+    SafetyAlertStrip(
+        speedLimit = trip.speedLimitAlertCount,
+        rapid = trip.rapidAccelerationAlertCount,
+        stop = trip.harshStopAlertCount,
+        corner = trip.harshCorneringAlertCount,
+        phone = trip.phoneUseAlertCount,
+        night = trip.nightDrivingAlertCount,
+    )
+}
+
+@Composable
+private fun SafetyAlertStrip(
+    speedLimit: Int,
+    rapid: Int,
+    stop: Int,
+    corner: Int,
+    phone: Int,
+    night: Int,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1234,12 +1293,12 @@ private fun SafetyAlertStrip(trip: TeenTrip) {
             .padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SafetyStripItem("Over Limit", trip.speedLimitAlertCount, Icons.Filled.Speed)
-        SafetyStripItem("Rapid", trip.rapidAccelerationAlertCount, Icons.Filled.Warning)
-        SafetyStripItem("Stop", trip.harshStopAlertCount, Icons.Filled.Warning)
-        SafetyStripItem("Corner", trip.harshCorneringAlertCount, Icons.Filled.Navigation)
-        SafetyStripItem("Phone", trip.phoneUseAlertCount, Icons.Filled.Person)
-        SafetyStripItem("Night", trip.nightDrivingAlertCount, Icons.Filled.Warning)
+        SafetyStripItem("Over Limit", speedLimit, Icons.Filled.Speed)
+        SafetyStripItem("Rapid", rapid, Icons.Filled.Warning)
+        SafetyStripItem("Stop", stop, Icons.Filled.Warning)
+        SafetyStripItem("Corner", corner, Icons.Filled.Navigation)
+        SafetyStripItem("Phone", phone, Icons.Filled.Person)
+        SafetyStripItem("Night", night, Icons.Filled.Warning)
     }
 }
 
@@ -1453,7 +1512,7 @@ private fun TeenProfileScreen(
     ).toUriString()
 
     ProfileScreenColumn {
-        GlassCard(modifier = Modifier.height(156.dp)) {
+        GlassCard(modifier = Modifier.height(132.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Box(
                     modifier = Modifier
@@ -1492,30 +1551,17 @@ private fun TeenProfileScreen(
                     Text("Save")
                 }
             }
-            OutlinedButton(
-                onClick = onSync,
-                modifier = Modifier.fillMaxWidth().height(38.dp),
-                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                    contentColor = TeenGreen,
-                ),
-            ) {
-                Text("Refresh QR")
-            }
         }
-        ProfileCloudCard(
-            message = cloudState.message,
-            detail = cloudState.error ?: "UID: ${cloudState.uid ?: accountState.teenProfileId.ifBlank { "pending" }}",
-            isReady = accountState.teenProfileId.isNotBlank() && accountState.familyGroupId.isNotBlank(),
-            modifier = Modifier.height(68.dp),
-        )
         PairingPayloadCard(
             payload = payload,
             isReady = accountState.teenProfileId.isNotBlank() && accountState.familyGroupId.isNotBlank(),
             pairingCode = accountState.pairingCode,
             familyGroupId = accountState.familyGroupId,
-            modifier = Modifier.weight(1f),
+            statusText = cloudState.error ?: cloudState.message,
+            onRefresh = onSync,
+            modifier = Modifier.height(314.dp),
         )
-        GlassCard(modifier = Modifier.height(66.dp)) {
+        GlassCard(modifier = Modifier.height(82.dp)) {
             Text("Privacy & Safety", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
                 "Trips stay local first and sync when cloud is ready.",
@@ -1533,8 +1579,8 @@ private fun ProfileScreenColumn(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
         content = content,
     )
 }
@@ -1550,33 +1596,6 @@ private fun profileTextFieldColors() =
         unfocusedBorderColor = Color.White.copy(alpha = 0.24f),
         cursorColor = TeenGreen,
     )
-
-@Composable
-private fun ProfileCloudCard(
-    message: String,
-    detail: String,
-    isReady: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    GlassCard(modifier = modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(if (isReady) TeenGreen.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.10f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.Sync, contentDescription = null, tint = if (isReady) TeenGreen else MutedHomeText)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Cloud sync", color = MutedHomeText, style = MaterialTheme.typography.labelLarge)
-                Text(message, color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-}
 
 @Composable
 private fun ParentDashboardScreen(
@@ -1836,20 +1855,41 @@ private fun PairingPayloadCard(
     isReady: Boolean,
     pairingCode: String,
     familyGroupId: String,
+    statusText: String,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     GlassCard(modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("Teen QR pairing", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Text(if (isReady) "Ready" else "Sync needed", color = if (isReady) TeenGreen else MutedHomeText, style = MaterialTheme.typography.labelLarge)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Teen QR pairing", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (isReady) "Ready • $statusText" else "Sync needed",
+                        color = if (isReady) TeenGreen else MutedHomeText,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onRefresh,
+                    modifier = Modifier
+                        .width(92.dp)
+                        .height(38.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        contentColor = TeenGreen,
+                    ),
+                ) {
+                    Text("Refresh")
+                }
             }
             if (isReady) {
                 Box(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    PairingQrCode(payload = payload, size = 104.dp)
+                    PairingQrCode(payload = payload, size = 126.dp)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     ProfileInfoChip("Code", pairingCode.ifBlank { "pending" }, Modifier.weight(1f))
