@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "745663495094",
+    "project_id": "teendrive",
+    "storage_bucket": "teendrive.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:745663495094:android:7a2c09c2fdd93d1e749f17",
+        "android_client_info": {
+          "package_name": "com.vlad8110.teendrive"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "745663495094-ub6fsnt9tlsdh5j6r0padkp93t1putpi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2XRF349MQqdr2aQS3FWCtcZIlLtOE8JM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "745663495094-ub6fsnt9tlsdh5j6r0padkp93t1putpi.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "745663495094-hdd0925gnc1rludvatjvbvn1jq1okvnm.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vlad8110.teendrive"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
