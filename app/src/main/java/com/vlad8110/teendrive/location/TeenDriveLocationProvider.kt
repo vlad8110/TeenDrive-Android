@@ -15,6 +15,7 @@ data class LocationSnapshot(
     val accuracyMeters: Float?,
     val provider: String?,
     val speedLimitMetersPerSecond: Double? = null,
+    val phoneUnlockedWhileMoving: Boolean = false,
 ) {
     val speedMph: Double
         get() = max(speedMetersPerSecond, 0.0) * 2.2369362921

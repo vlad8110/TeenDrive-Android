@@ -16,6 +16,17 @@ data class SafetyDetectionInput(
     val currentPoint: RoutePoint,
     val currentSpeedMetersPerSecond: Double,
     val speedLimitMetersPerSecond: Double? = null,
+    val phoneUnlockedWhileMoving: Boolean = false,
+    val savedPlaces: List<SavedPlace> = emptyList(),
+    val arrivedPlaceIds: Set<String> = emptySet(),
+)
+
+data class SavedPlace(
+    val id: String,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val radiusMeters: Double = 100.0,
 )
 
 object SafetyDetector {
@@ -24,6 +35,8 @@ object SafetyDetector {
     private const val HARSH_STOP_MPS2 = -3.4
     private const val HARSH_CORNERING_DEGREES = 55.0
     private const val MIN_CORNERING_SPEED_MPS = 8.9
+    private const val MOVING_PHONE_USE_SPEED_MPS = 2.2
+    private const val ARRIVAL_MAX_SPEED_MPS = 4.5
 
     fun detect(input: SafetyDetectionInput): List<SafetyAlert> {
         val alerts = mutableListOf<SafetyAlert>()
@@ -66,7 +79,32 @@ object SafetyDetector {
             alerts += alert(SafetyAlertKind.NIGHT_DRIVING, current, input.currentSpeedMetersPerSecond, "Night driving")
         }
 
+        if (input.phoneUnlockedWhileMoving && input.currentSpeedMetersPerSecond >= MOVING_PHONE_USE_SPEED_MPS) {
+            alerts += alert(SafetyAlertKind.PHONE_USE, current, input.currentSpeedMetersPerSecond, "Phone unlocked while moving")
+        }
+
+        newlyArrivedPlaceIds(input).forEach { placeId ->
+            val place = input.savedPlaces.first { it.id == placeId }
+            alerts += alert(SafetyAlertKind.PLACE_ARRIVAL, current, input.currentSpeedMetersPerSecond, "Arrived at ${place.name}")
+        }
+
         return alerts
+    }
+
+    fun newlyArrivedPlaceIds(input: SafetyDetectionInput): Set<String> {
+        val previous = input.previousPoint ?: return emptySet()
+        val current = input.currentPoint
+        if (input.currentSpeedMetersPerSecond > ARRIVAL_MAX_SPEED_MPS) return emptySet()
+
+        return input.savedPlaces
+            .filterNot { it.id in input.arrivedPlaceIds }
+            .filter { place ->
+                val previousDistance = distanceMeters(previous.latitude, previous.longitude, place.latitude, place.longitude)
+                val currentDistance = distanceMeters(current.latitude, current.longitude, place.latitude, place.longitude)
+                previousDistance > place.radiusMeters && currentDistance <= place.radiusMeters
+            }
+            .map { it.id }
+            .toSet()
     }
 
     private fun alert(

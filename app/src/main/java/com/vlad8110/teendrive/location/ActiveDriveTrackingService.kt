@@ -6,8 +6,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -48,16 +50,30 @@ class ActiveDriveTrackingService : Service() {
     private var teenProfileId: String = ""
     private var familyGroupId: String = ""
     private var teenName: String = "Teen"
+    private var pendingPhoneUnlockWhileMoving: Boolean = false
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_USER_PRESENT && isRunning) {
+                pendingPhoneUnlockWhileMoving = true
+            }
+        }
+    }
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             lastSnapshot = result.lastLocation?.let {
+                val speedMetersPerSecond = if (it.hasSpeed()) it.speed.toDouble() else 0.0
+                val phoneUnlockedWhileMoving = pendingPhoneUnlockWhileMoving && speedMetersPerSecond >= PHONE_UNLOCK_MOVING_SPEED_MPS
+                if (phoneUnlockedWhileMoving || speedMetersPerSecond < PHONE_UNLOCK_MOVING_SPEED_MPS) {
+                    pendingPhoneUnlockWhileMoving = false
+                }
                 LocationSnapshot(
                     latitude = it.latitude,
                     longitude = it.longitude,
-                    speedMetersPerSecond = if (it.hasSpeed()) it.speed.toDouble() else 0.0,
+                    speedMetersPerSecond = speedMetersPerSecond,
                     accuracyMeters = if (it.hasAccuracy()) it.accuracy else null,
                     provider = it.provider,
                     speedLimitMetersPerSecond = it.speedLimitMetersPerSecondFromExtras(),
+                    phoneUnlockedWhileMoving = phoneUnlockedWhileMoving,
                 )
             }?.also {
                 val previousAlertIds = ActiveDriveSessionStore.current()
@@ -78,6 +94,7 @@ class ActiveDriveTrackingService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -144,6 +161,7 @@ class ActiveDriveTrackingService : Service() {
 
     override fun onDestroy() {
         stopTracking()
+        runCatching { unregisterReceiver(userPresentReceiver) }
         super.onDestroy()
     }
 
@@ -254,6 +272,7 @@ class ActiveDriveTrackingService : Service() {
         private const val LOCATION_INTERVAL_MILLIS = 5_000L
         private const val FASTEST_LOCATION_INTERVAL_MILLIS = 2_000L
         private const val MIN_DISTANCE_METERS = 5f
+        private const val PHONE_UNLOCK_MOVING_SPEED_MPS = 2.2
         private const val EXTRA_TEEN_PROFILE_ID = "teenProfileId"
         private const val EXTRA_FAMILY_GROUP_ID = "familyGroupId"
         private const val EXTRA_TEEN_NAME = "teenName"

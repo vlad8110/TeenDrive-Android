@@ -25,6 +25,7 @@ data class ActiveDriveSnapshot(
     val speedAlerts: List<SpeedAlert>,
     val safetyAlerts: List<SafetyAlert>,
     val alertReady: Boolean,
+    val arrivedPlaceIds: Set<String> = emptySet(),
 ) {
     val duration: Duration
         get() = Duration.between(startedAt, updatedAt)
@@ -66,6 +67,7 @@ object ActiveDriveSessionStore {
             speedAlerts = emptyList(),
             safetyAlerts = emptyList(),
             alertReady = false,
+            arrivedPlaceIds = emptySet(),
         ).also { snapshot = it }
     }
 
@@ -80,16 +82,22 @@ object ActiveDriveSessionStore {
         val pointBeforePrevious = current.route.dropLast(1).lastOrNull()
         val segmentMeters = previousPoint?.let { distanceMeters(it.latitude, it.longitude, point.latitude, point.longitude) } ?: 0.0
         val updatedRoute = current.route + point
-        val detectedAlerts = SafetyDetector.detect(
-            SafetyDetectionInput(
-                pointBeforePrevious = pointBeforePrevious,
-                previousPoint = previousPoint,
-                previousSpeedMetersPerSecond = current.currentSpeedMetersPerSecond,
-                currentPoint = point,
-                currentSpeedMetersPerSecond = location.speedMetersPerSecond,
-                speedLimitMetersPerSecond = location.speedLimitMetersPerSecond ?: current.speedLimitMetersPerSecond,
-            ),
-        ).filterNot { alert -> current.hasRecentAlert(alert) }
+        val detectionInput = SafetyDetectionInput(
+            pointBeforePrevious = pointBeforePrevious,
+            previousPoint = previousPoint,
+            previousSpeedMetersPerSecond = current.currentSpeedMetersPerSecond,
+            currentPoint = point,
+            currentSpeedMetersPerSecond = location.speedMetersPerSecond,
+            speedLimitMetersPerSecond = location.speedLimitMetersPerSecond ?: current.speedLimitMetersPerSecond,
+            phoneUnlockedWhileMoving = location.phoneUnlockedWhileMoving,
+            savedPlaces = savedPlaces,
+            arrivedPlaceIds = current.arrivedPlaceIds,
+        )
+        val rawDetectedAlerts = SafetyDetector.detect(detectionInput)
+        val newlyArrivedPlaceIds = SafetyDetector.newlyArrivedPlaceIds(
+            detectionInput,
+        )
+        val detectedAlerts = rawDetectedAlerts.filterNot { alert -> current.hasRecentAlert(alert) }
         val speedAlerts = detectedAlerts
             .filter { it.kind == com.vlad8110.teendrive.model.SafetyAlertKind.SPEED_LIMIT }
             .mapNotNull { alert ->
@@ -117,6 +125,7 @@ object ActiveDriveSessionStore {
             speedAlerts = current.speedAlerts + speedAlerts,
             safetyAlerts = current.safetyAlerts + detectedAlerts,
             alertReady = updatedRoute.size >= ALERT_READY_ROUTE_POINTS,
+            arrivedPlaceIds = current.arrivedPlaceIds + newlyArrivedPlaceIds,
         )
         snapshot = updated
         return updated
@@ -126,6 +135,12 @@ object ActiveDriveSessionStore {
         val completed = snapshot?.copy(updatedAt = now)
         snapshot = null
         return completed
+    }
+
+    private var savedPlaces: List<SavedPlace> = emptyList()
+
+    fun setSavedPlaces(places: List<SavedPlace>) {
+        savedPlaces = places
     }
 }
 
