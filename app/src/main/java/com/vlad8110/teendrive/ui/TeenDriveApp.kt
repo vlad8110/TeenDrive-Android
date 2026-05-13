@@ -9,6 +9,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,6 +104,7 @@ import com.vlad8110.teendrive.model.ConnectedTeen
 import com.vlad8110.teendrive.model.PairingPayload
 import com.vlad8110.teendrive.model.RoutePoint
 import com.vlad8110.teendrive.model.SafetyAlert
+import com.vlad8110.teendrive.model.SafetyAlertKind
 import com.vlad8110.teendrive.model.TeenTrip
 import com.vlad8110.teendrive.sync.TeenDriveSyncScheduler
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -1135,9 +1138,32 @@ private fun TripListScreen(
 ) {
     ScreenColumn {
         if (trips.isEmpty()) {
-            GlassCard {
-                Text("No trips yet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("Start and stop drive tracking to create the first local report.")
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
+            ) {
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    Icons.Filled.DirectionsCar,
+                    contentDescription = null,
+                    tint = TeenGreen,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(42.dp),
+                )
+                Text(
+                    "No Trips",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+                Text(
+                    "Start a drive to save the first route.",
+                    color = MutedHomeText,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+                Spacer(Modifier.weight(1f))
             }
         } else {
             trips.forEach { trip ->
@@ -1149,38 +1175,88 @@ private fun TripListScreen(
 
 @Composable
 private fun TripRow(trip: TeenTrip, onClick: () -> Unit) {
-    GlassCard {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
+    GlassCard(modifier = Modifier.clickable(onClick = onClick)) {
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${trip.behaviorScoreBreakdown.score}",
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.titleLarge,
+                    trip.startedAt.toLocalReportText(),
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReportInlineMetric(Icons.Filled.Navigation, "${trip.distanceMiles.oneDecimal()} mi")
+                    ReportInlineMetric(Icons.Filled.Speed, "${trip.duration.driveDurationText()}")
+                    ReportInlineMetric(Icons.Filled.Speed, "${trip.topSpeedMph.toInt()} mph")
+                }
+                if (trip.safetyAlertCount > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "${trip.safetyAlertCount} safety alert${if (trip.safetyAlertCount == 1) "" else "s"}",
+                            color = Color(0xFFFFB74D),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                SafetyAlertStrip(trip)
             }
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(trip.startedAt.toLocalReportText(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("${trip.distanceMiles.oneDecimal()} mi • ${trip.duration.driveDurationText()} • ${trip.topSpeedMph.toInt()} mph top")
-                Text("${trip.route.size} route points • ${trip.safetyAlertCount} alerts", style = MaterialTheme.typography.bodySmall)
-            }
-            Button(
+            OutlinedButton(
                 onClick = onClick,
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = TeenGreen,
-                    contentColor = Color(0xFF06210F),
-                ),
             ) {
                 Text("Open")
             }
         }
+    }
+}
+
+@Composable
+private fun ReportInlineMetric(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = MutedHomeText, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(text, color = MutedHomeText, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun SafetyAlertStrip(trip: TeenTrip) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .horizontalScroll(rememberScrollState())
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SafetyStripItem("Over Limit", trip.speedLimitAlertCount, Icons.Filled.Speed)
+        SafetyStripItem("Rapid", trip.rapidAccelerationAlertCount, Icons.Filled.Warning)
+        SafetyStripItem("Stop", trip.harshStopAlertCount, Icons.Filled.Warning)
+        SafetyStripItem("Corner", trip.harshCorneringAlertCount, Icons.Filled.Navigation)
+        SafetyStripItem("Phone", trip.phoneUseAlertCount, Icons.Filled.Person)
+        SafetyStripItem("Night", trip.nightDrivingAlertCount, Icons.Filled.Warning)
+    }
+}
+
+@Composable
+private fun SafetyStripItem(title: String, value: Int, icon: ImageVector) {
+    val color = if (value > 0) Color(0xFFFFB74D) else MutedHomeText
+    Column(
+        modifier = Modifier.width(68.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(value.toString(), color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        }
+        Text(title, color = MutedHomeText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1297,13 +1373,14 @@ private fun TripDetailScreen(
 ) {
     var useSatelliteMap by rememberSaveable { mutableStateOf(true) }
     ScreenColumn {
-        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-            Button(
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Trip Route", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            OutlinedButton(
                 onClick = onBack,
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = TeenGreen,
-                    contentColor = Color(0xFF06210F),
-                ),
             ) {
                 Text("Back")
             }
@@ -1313,47 +1390,49 @@ private fun TripDetailScreen(
             useSatelliteMap = useSatelliteMap,
             onToggleMapType = { useSatelliteMap = !useSatelliteMap },
         )
-        TripStatsCard(trip)
-        StatusCard("Alerts", "${trip.safetyAlertCount}", "Speed ${trip.speedLimitAlertCount} • Harsh stops ${trip.harshStopAlertCount} • Phone ${trip.phoneUseAlertCount}")
         GlassCard {
-            Text("Alert breakdown", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text("Rapid acceleration: ${trip.rapidAccelerationAlertCount}")
-            Text("Harsh cornering: ${trip.harshCorneringAlertCount}")
-            Text("Night driving: ${trip.nightDrivingAlertCount}")
-        }
-    }
-}
-
-@Composable
-private fun TripStatsCard(trip: TeenTrip) {
-    GlassCard {
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.fillMaxWidth()) {
-            ReportStatText("Score", trip.behaviorScoreBreakdown.score.toString(), "", Modifier.weight(1f))
-            ReportStatText("Distance", trip.distanceMiles.oneDecimal(), "mi", Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.fillMaxWidth()) {
-            ReportStatText("Duration", trip.duration.driveDurationText(), "", Modifier.weight(1f))
-            ReportStatText("Top speed", trip.topSpeedMph.toInt().toString(), "mph", Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
-private fun ReportStatText(
-    title: String,
-    value: String,
-    unit: String,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title, color = MutedHomeText, style = MaterialTheme.typography.labelLarge)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            if (unit.isNotBlank()) {
-                Spacer(Modifier.width(4.dp))
-                Text(unit, color = MutedHomeText, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                DetailMetric("Distance", "${trip.distanceMiles.oneDecimal()} mi", Modifier.weight(1f))
+                DetailMetric("Top", "${trip.topSpeedMph.toInt()} mph", Modifier.weight(1f))
+                DetailMetric("Alerts", trip.safetyAlertCount.toString(), Modifier.weight(1f))
+            }
+            SafetyAlertStrip(trip)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(trip.startedAt.toFullLocalReportText(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Ended ${trip.endedAt.toLocalTimeText()}", color = MutedHomeText, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (trip.displaySafetyAlerts.isNotEmpty()) {
+                Text("Safety Alerts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                trip.displaySafetyAlerts.forEach { alert ->
+                    SafetyAlertRow(alert)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun DetailMetric(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, color = MutedHomeText, style = MaterialTheme.typography.labelLarge)
+        Text(value, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun SafetyAlertRow(alert: SafetyAlert) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Icon(alertIcon(alert.kind), contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(alert.kind.title, color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(alert.displayText, color = MutedHomeText, style = MaterialTheme.typography.bodySmall)
+        }
+        Text(alert.timestamp.toLocalTimeText(), color = MutedHomeText, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -1891,6 +1970,19 @@ private fun focusAreaForTrips(trips: List<TeenTrip>): String {
     return if (top.second == 0) "None" else top.first
 }
 
+private fun alertIcon(kind: SafetyAlertKind): ImageVector =
+    when (kind) {
+        SafetyAlertKind.SPEED_LIMIT -> Icons.Filled.Speed
+        SafetyAlertKind.RAPID_ACCELERATION -> Icons.Filled.Warning
+        SafetyAlertKind.HARSH_STOP -> Icons.Filled.Warning
+        SafetyAlertKind.HARSH_CORNERING -> Icons.Filled.Navigation
+        SafetyAlertKind.NIGHT_DRIVING -> Icons.Filled.Warning
+        SafetyAlertKind.PHONE_USE -> Icons.Filled.Person
+        SafetyAlertKind.TRIP_STARTED -> Icons.Filled.PlayArrow
+        SafetyAlertKind.TRIP_ENDED -> Icons.Filled.DirectionsCar
+        SafetyAlertKind.PLACE_ARRIVAL -> Icons.Filled.LocationOn
+    }
+
 private fun android.content.Context.hasPermission(permission: String): Boolean =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -1900,4 +1992,14 @@ private fun android.content.Context.hasAnyPermission(vararg permissions: String)
 private val reportDateFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MMM d, h:mm a").withZone(ZoneId.systemDefault())
 
+private val reportFullDateFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy h:mm a").withZone(ZoneId.systemDefault())
+
+private val reportTimeFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("h:mm a").withZone(ZoneId.systemDefault())
+
 private fun Instant.toLocalReportText(): String = reportDateFormatter.format(this)
+
+private fun Instant.toFullLocalReportText(): String = reportFullDateFormatter.format(this)
+
+private fun Instant.toLocalTimeText(): String = reportTimeFormatter.format(this)
