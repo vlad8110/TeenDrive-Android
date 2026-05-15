@@ -55,11 +55,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -186,6 +187,16 @@ fun TeenDriveApp(
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(accountState.hasSelectedRole, accountState.selectedRole, accountState.connectedTeens) {
+        if (
+            accountState.hasSelectedRole &&
+            accountState.selectedRole == AccountRole.PARENT &&
+            accountState.connectedTeens.isEmpty()
+        ) {
+            syncAccount(accountState)
         }
     }
 
@@ -355,13 +366,6 @@ private fun TeenDriveNavShell(
                 composable(Screen.TeenHome.route) {
                     TeenHomeScreen(
                         accountState = accountState,
-                        onOpenProfile = {
-                            navController.navigate(Screen.TeenProfile.route) {
-                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
                         onOpenReports = {
                             navController.navigate(Screen.TeenReports.route) {
                                 popUpTo(navController.graph.findStartDestination().id) { saveState = true }
@@ -410,7 +414,6 @@ private fun TeenDriveTopBar(
 @Composable
 private fun TeenHomeScreen(
     accountState: AccountState,
-    onOpenProfile: () -> Unit,
     onOpenReports: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -423,10 +426,14 @@ private fun TeenHomeScreen(
     val averageScore = if (trips.isEmpty()) 100 else trips.map { it.behaviorScoreBreakdown.score }.average().toInt()
     val safeStreak = trips.takeWhile { it.safetyAlertCount == 0 && it.behaviorScoreBreakdown.score >= 90 }.size
     val lastDriveMinutes = lastTrip?.duration?.toMinutes() ?: 0
-    val parentConnected = accountState.connectedParents.isNotEmpty()
+    val localParentNames = accountState.connectedParents.parentDisplayNames()
+    val remoteParentNames = remember { mutableStateOf(emptyList<String>()) }
+    val connectedParentNames = localParentNames.ifEmpty { remoteParentNames.value }
+    val parentConnected = accountState.connectedParents.isNotEmpty() ||
+        (accountState.teenProfileId.isNotBlank() && accountState.familyGroupId.isNotBlank())
     val focusArea = focusAreaForTrips(trips)
     var isDriveTracking by remember { mutableStateOf(ActiveDriveTrackingService.isRunning) }
-    var activeDriveSnapshot by remember { mutableStateOf<ActiveDriveSnapshot?>(ActiveDriveTrackingService.activeDriveSnapshot) }
+    var activeDriveSnapshot by remember { mutableStateOf(ActiveDriveTrackingService.activeDriveSnapshot) }
     var driveClockNow by remember { mutableStateOf(Instant.now()) }
 
     LaunchedEffect(Unit) {
@@ -435,6 +442,14 @@ private fun TeenHomeScreen(
             activeDriveSnapshot = ActiveDriveTrackingService.activeDriveSnapshot
             driveClockNow = Instant.now()
             delay(1_000)
+        }
+    }
+
+    LaunchedEffect(accountState.teenProfileId, accountState.connectedParents) {
+        if (localParentNames.isEmpty() && accountState.teenProfileId.isNotBlank()) {
+            remoteParentNames.value = runCatching {
+                FirebaseAccountRepository().fetchConnectedParentNamesForTeen(accountState.teenProfileId)
+            }.getOrDefault(emptyList())
         }
     }
 
@@ -476,7 +491,7 @@ private fun TeenHomeScreen(
             HomeFocusCard(focusArea = focusArea, modifier = Modifier.weight(1f))
             ParentConnectionCard(
                 connected = parentConnected,
-                onPairNow = onOpenProfile,
+                parentNames = connectedParentNames,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -634,9 +649,15 @@ private fun HomeFocusCard(focusArea: String, modifier: Modifier = Modifier) {
 @Composable
 private fun ParentConnectionCard(
     connected: Boolean,
-    onPairNow: () -> Unit,
+    parentNames: List<String>,
     modifier: Modifier = Modifier,
 ) {
+    val connectedText = when {
+        parentNames.isEmpty() -> "Parent linked"
+        parentNames.size == 1 -> "Connected to ${parentNames.first()}"
+        else -> "Connected to ${parentNames.joinToString(", ")}"
+    }
+
     GlassCard(modifier = modifier.height(144.dp)) {
         Text("Parent Connection", style = MaterialTheme.typography.titleMedium, color = MutedHomeText, fontWeight = FontWeight.SemiBold)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -652,30 +673,39 @@ private fun ParentConnectionCard(
             Spacer(Modifier.width(12.dp))
             Column {
                 Text(if (connected) "Connected" else "Not connected", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(if (connected) "Sharing progress." else "Pair to share progress.", color = MutedHomeText, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    if (connected) connectedText else "Pair to share progress.",
+                    color = MutedHomeText,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-        }
-        Button(onClick = onPairNow, modifier = Modifier.fillMaxWidth()) {
-            Text(if (connected) "View pairing" else "Pair now")
         }
     }
 }
+
+private fun Set<String>.parentDisplayNames(): List<String> =
+    map { parent ->
+        parent.substringAfter("|", missingDelimiterValue = "")
+            .ifBlank { if ("|" in parent) "Parent" else "" }
+    }
+        .filter { it.isNotBlank() }
+        .distinct()
 
 @Composable
 private fun DriveDashboardScreen(accountState: AccountState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val locationProvider = remember { TeenDriveLocationProvider(context) }
-    var foregroundLocationGranted by remember {
-        mutableStateOf(context.hasAnyPermission(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-    }
+    var foregroundLocationGranted by remember { mutableStateOf(context.hasForegroundLocationPermission()) }
     var backgroundLocationGranted by remember {
         mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
     }
-    var locationSnapshot by remember { mutableStateOf<LocationSnapshot?>(null) }
+    var locationSnapshot by remember { mutableStateOf(null as LocationSnapshot?) }
     var locationStatus by remember { mutableStateOf("Location not requested yet") }
     var isDriveTracking by rememberSaveable { mutableStateOf(ActiveDriveTrackingService.isRunning) }
-    var activeDriveSnapshot by remember { mutableStateOf<ActiveDriveSnapshot?>(ActiveDriveTrackingService.activeDriveSnapshot) }
+    var activeDriveSnapshot by remember { mutableStateOf(ActiveDriveTrackingService.activeDriveSnapshot) }
     var driveClockNow by remember { mutableStateOf(Instant.now()) }
     var useSatelliteMap by rememberSaveable { mutableStateOf(true) }
 
@@ -1064,9 +1094,9 @@ private fun SpeedOverlay(
 @Composable
 private fun LiveDriveReportCard(
     snapshot: ActiveDriveSnapshot?,
+    modifier: Modifier = Modifier,
     isDriveTracking: Boolean = false,
     now: Instant = Instant.now(),
-    modifier: Modifier = Modifier,
 ) {
     val durationText = snapshot?.let {
         if (isDriveTracking) {
@@ -1154,8 +1184,8 @@ private fun ReportsScreen(accountState: AccountState) {
         TripRepository(TeenDriveDatabase.getInstance(context).tripDao())
     }
     val trips by repository.observeTrips().collectAsState(initial = emptyList())
-    var selectedTripId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedTrip = trips.firstOrNull { it.id == selectedTripId }
+    val selectedTripId = rememberSaveable { mutableStateOf(null as String?) }
+    val selectedTrip = trips.firstOrNull { it.id == selectedTripId.value }
 
     LaunchedEffect(trips.size, accountState.teenProfileId, accountState.familyGroupId) {
         TeenDriveSyncScheduler.requestNow(context)
@@ -1164,12 +1194,12 @@ private fun ReportsScreen(accountState: AccountState) {
     if (selectedTrip != null) {
         TripDetailScreen(
             trip = selectedTrip,
-            onBack = { selectedTripId = null },
+            onBack = { selectedTripId.value = null },
         )
     } else {
         TripListScreen(
             trips = trips,
-            onSelectTrip = { selectedTripId = it.id },
+            onSelectTrip = { selectedTripId.value = it.id },
         )
     }
 }
@@ -1608,22 +1638,73 @@ private fun ParentDashboardScreen(
     val connectedTeens = remember(accountState.connectedTeens) {
         accountState.connectedTeens.mapNotNull(ConnectedTeen::decode)
     }
-    var parentTrips by remember { mutableStateOf<List<ParentTeenTrip>>(emptyList()) }
-    var activeDrives by remember { mutableStateOf<List<ActiveTeenDrive>>(emptyList()) }
+    var parentTripsByTeen by remember { mutableStateOf(emptyMap<String, List<ParentTeenTrip>>()) }
+    var activeDrivesByTeen by remember { mutableStateOf(emptyMap<String, ActiveTeenDrive>()) }
+    val parentTrips by remember {
+        derivedStateOf {
+            parentTripsByTeen.values.flatten().sortedByDescending { it.trip.startedAt }
+        }
+    }
+    val activeDrives by remember {
+        derivedStateOf {
+            activeDrivesByTeen.values.sortedByDescending { it.updatedAt }
+        }
+    }
     var reportStatus by rememberSaveable { mutableStateOf("Parent reports ready") }
 
     fun refreshParentReports() {
         scope.launch {
+            if (connectedTeens.isEmpty()) {
+                activeDrivesByTeen = emptyMap()
+                parentTripsByTeen = emptyMap()
+                reportStatus = "Pair with a teen to load reports"
+                return@launch
+            }
             reportStatus = "Loading teen status..."
             runCatching {
                 parentTripRepository.fetchActiveDrivesForConnectedTeens(connectedTeens) to
                     parentTripRepository.fetchTripsForConnectedTeens(connectedTeens)
             }.onSuccess { (drives, trips) ->
-                activeDrives = drives
-                parentTrips = trips
+                activeDrivesByTeen = drives.associateBy { it.teenProfileId }
+                parentTripsByTeen = trips.groupBy { it.teen.teenProfileId }
                 reportStatus = "Active ${drives.size} • Reports ${trips.size}"
             }.onFailure { exception ->
                 reportStatus = exception.localizedMessage ?: "Could not load teen reports"
+            }
+        }
+    }
+
+    DisposableEffect(connectedTeens) {
+        if (connectedTeens.isEmpty()) {
+            activeDrivesByTeen = emptyMap()
+            parentTripsByTeen = emptyMap()
+            reportStatus = "Pair with a teen to load reports"
+            onDispose { }
+        } else {
+            reportStatus = "Listening for teen reports..."
+            val activeTeenIds = connectedTeens.map { it.teenProfileId }.toSet()
+            activeDrivesByTeen = activeDrivesByTeen.filterKeys { it in activeTeenIds }
+            parentTripsByTeen = parentTripsByTeen.filterKeys { it in activeTeenIds }
+            val listeners = parentTripRepository.listenToConnectedTeens(
+                connectedTeens = connectedTeens,
+                onTripsChanged = { teenProfileId, trips ->
+                    parentTripsByTeen = parentTripsByTeen + (teenProfileId to trips)
+                    reportStatus = "Active ${activeDrivesByTeen.size} • Reports ${parentTripsByTeen.values.flatten().size}"
+                },
+                onActiveDriveChanged = { teenProfileId, activeDrive ->
+                    activeDrivesByTeen = if (activeDrive == null) {
+                        activeDrivesByTeen - teenProfileId
+                    } else {
+                        activeDrivesByTeen + (teenProfileId to activeDrive)
+                    }
+                    reportStatus = "Active ${activeDrivesByTeen.size} • Reports ${parentTripsByTeen.values.flatten().size}"
+                },
+                onError = { exception ->
+                    reportStatus = exception.localizedMessage ?: "Could not load teen reports"
+                },
+            )
+            onDispose {
+                listeners.forEach { it.remove() }
             }
         }
     }
@@ -2026,8 +2107,9 @@ private fun alertIcon(kind: SafetyAlertKind): ImageVector =
 private fun android.content.Context.hasPermission(permission: String): Boolean =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
-private fun android.content.Context.hasAnyPermission(vararg permissions: String): Boolean =
-    permissions.any { hasPermission(it) }
+private fun android.content.Context.hasForegroundLocationPermission(): Boolean =
+    hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+        hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
 
 private val reportDateFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MMM d, h:mm a").withZone(ZoneId.systemDefault())

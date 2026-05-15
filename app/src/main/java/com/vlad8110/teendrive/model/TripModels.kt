@@ -158,9 +158,6 @@ data class TripBehaviorScoreBreakdown(
     val harshStopPenalty: Double,
     val alertRatePenalty: Double,
 ) {
-    val totalPenalty: Double
-        get() = topSpeedPenalty + speedingPenalty + drivingEventPenalty + harshStopPenalty + alertRatePenalty
-
     companion object {
         fun compute(trip: TeenTrip): TripBehaviorScoreBreakdown {
             val durationHours = max(trip.duration.seconds / 3600.0, 0.1667)

@@ -55,8 +55,13 @@ class FirebaseAccountRepository(
         val syncState = state.resetTeenCloudLinkIfStale(userId)
         val pairingCode = syncState.pairingCode.ifBlank { makePairingCode() }
         val pairingToken = syncState.pairingToken.ifBlank { makePairingToken() }
-        val groupId = syncState.familyGroupId.ifBlank { firestore.collection(FAMILY_GROUPS).document().id }
+        val existingTeenProfile = firestore.collection(TEEN_PROFILES).document(userId).get().await().data.orEmpty()
+        val groupId = syncState.familyGroupId
+            .ifBlank { preferredExistingFamilyGroupId(userId, existingTeenProfile) }
+            .ifBlank { existingTeenProfile["familyGroupID"] as? String ?: "" }
+            .ifBlank { firestore.collection(FAMILY_GROUPS).document().id }
         val displayName = syncState.displayName.normalized("Teen")
+        val connectedParents = connectedParentsForTeen(existingTeenProfile.stringList("connectedParentIDs"))
 
         try {
             firestore.collection(FAMILY_GROUPS).document(groupId)
@@ -110,6 +115,7 @@ class FirebaseAccountRepository(
                 pairingToken = pairingToken,
                 teenProfileId = userId,
                 familyGroupId = groupId,
+                connectedParents = connectedParents,
             ),
             statusMessage = "Teen profile synced",
             uid = userId,
@@ -117,27 +123,45 @@ class FirebaseAccountRepository(
         )
     }
 
+    private suspend fun connectedParentsForTeen(parentIds: List<String>): Set<String> =
+        parentIds.map { parentId ->
+            val parentData = firestore.collection(PARENT_PROFILES).document(parentId).get().await().data.orEmpty()
+            val parentName = (parentData["displayName"] as? String).orEmpty().ifBlank { "Parent" }
+            "${parentId}|${parentName.replace("|", " ")}"
+        }.toSet()
+
+    suspend fun fetchConnectedParentNamesForTeen(teenProfileId: String): List<String> {
+        if (teenProfileId.isBlank()) return emptyList()
+        val teenData = firestore.collection(TEEN_PROFILES).document(teenProfileId).get().await().data.orEmpty()
+        return teenData.stringList("connectedParentIDs").map { parentId ->
+            val parentData = firestore.collection(PARENT_PROFILES).document(parentId).get().await().data.orEmpty()
+            (parentData["displayName"] as? String).orEmpty().ifBlank { "Parent" }
+        }.distinct()
+    }
+
     suspend fun syncParentProfile(state: AccountState): AccountSyncResult {
         val userId = signInIfNeeded()
         val fcmToken = fcmTokenOrNull()
         val syncState = state.resetParentCloudLinkIfStale(userId)
         val displayName = syncState.displayName.normalized("Parent")
-        val familyIds = syncState.connectedTeens.mapNotNull { it.substringAfterLast("|").takeIf(String::isNotBlank) }.distinct()
-        val teenIds = syncState.connectedTeens.mapNotNull { encoded ->
+        val connectedTeens = restoredConnectedTeensForParent(userId, syncState)
+        val familyIds = connectedTeens.mapNotNull { it.substringAfterLast("|").takeIf(String::isNotBlank) }.distinct()
+        val teenIds = connectedTeens.mapNotNull { encoded ->
             encoded.split("|").getOrNull(3)?.takeIf(String::isNotBlank)
         }.distinct()
 
+        val profileData = mutableMapOf<String, Any?>(
+            "displayName" to displayName,
+            "fcmToken" to fcmToken,
+            "updatedAt" to FieldValue.serverTimestamp(),
+        )
+        if (familyIds.isNotEmpty() || teenIds.isNotEmpty()) {
+            profileData["familyGroupIDs"] = familyIds
+            profileData["connectedTeenIDs"] = teenIds
+        }
+
         firestore.collection(PARENT_PROFILES).document(userId)
-            .set(
-                mapOf(
-                    "displayName" to displayName,
-                    "familyGroupIDs" to familyIds,
-                    "connectedTeenIDs" to teenIds,
-                    "fcmToken" to fcmToken,
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                ),
-                SetOptions.merge(),
-            )
+            .set(profileData, SetOptions.merge())
             .await()
 
         registerAndroidClient(userId)
@@ -147,6 +171,7 @@ class FirebaseAccountRepository(
                 hasSelectedRole = true,
                 displayName = displayName,
                 parentProfileId = userId,
+                connectedTeens = connectedTeens,
             ),
             statusMessage = "Parent profile synced",
             uid = userId,
@@ -154,15 +179,88 @@ class FirebaseAccountRepository(
         )
     }
 
-    suspend fun createPairingPayload(state: AccountState): PairingPayload {
-        val synced = syncTeenProfile(state).state
-        return PairingPayload(
-            code = synced.pairingCode,
-            token = synced.pairingToken,
-            teenName = synced.displayName,
-            teenProfileId = synced.teenProfileId,
-            familyGroupId = synced.familyGroupId,
-        )
+    private suspend fun restoredConnectedTeensForParent(
+        parentId: String,
+        state: AccountState,
+    ): Set<String> {
+        val localCloudTeens = state.connectedTeens
+            .mapNotNull(ConnectedTeen::decode)
+            .filter { it.teenProfileId.isNotBlank() && it.familyGroupId.isNotBlank() }
+        if (localCloudTeens.isNotEmpty()) {
+            return state.connectedTeens
+        }
+
+        val parentData = firestore.collection(PARENT_PROFILES).document(parentId).get().await().data.orEmpty()
+        val parentFamilyIds = parentData.stringList("familyGroupIDs")
+        val familyIds = parentFamilyIds
+            .ifEmpty { listOf(state.familyGroupId).filter { it.isNotBlank() } }
+            .ifEmpty {
+                firestore.collection(FAMILY_GROUPS)
+                    .whereArrayContains("parentIDs", parentId)
+                    .get()
+                    .await()
+                    .documents
+                    .map { it.id }
+            }
+            .distinct()
+        val teenIds = parentData.stringList("connectedTeenIDs").ifEmpty {
+            familyIds.flatMap { familyGroupId ->
+                firestore.collection(FAMILY_GROUPS).document(familyGroupId).get().await()
+                    .data.orEmpty()
+                    .stringList("teenIDs")
+            }.distinct()
+        }
+        if (teenIds.isEmpty()) return state.connectedTeens
+
+        return teenIds.mapNotNull { teenId ->
+            val teenData = firestore.collection(TEEN_PROFILES).document(teenId).get().await().data.orEmpty()
+            val familyGroupId = (teenData["familyGroupID"] as? String)
+                ?: familyIds.singleOrNull()
+                ?: familyIds.firstOrNull()
+                ?: return@mapNotNull null
+            val displayName = (teenData["displayName"] as? String).orEmpty().ifBlank { "Teen" }
+            ConnectedTeen(
+                id = teenId,
+                name = displayName,
+                pairingCode = state.pairingCode,
+                teenProfileId = teenId,
+                familyGroupId = familyGroupId,
+            ).encode()
+        }.toSet().ifEmpty { state.connectedTeens }
+    }
+
+    private suspend fun preferredExistingFamilyGroupId(
+        teenId: String,
+        teenProfileData: Map<String, Any?>,
+    ): String {
+        val connectedParentIds = teenProfileData.stringList("connectedParentIDs")
+        val linkedFamilyIds = connectedParentIds.flatMap { parentId ->
+            firestore.collection(PARENT_PROFILES).document(parentId).get().await()
+                .data.orEmpty()
+                .stringList("familyGroupIDs")
+        }
+
+        linkedFamilyIds
+            .map { familyGroupId ->
+                familyGroupId to firestore.collection(FAMILY_GROUPS).document(familyGroupId).get().await().data.orEmpty()
+            }
+            .filter { (_, data) ->
+                teenId in data.stringList("teenIDs") && data.stringList("parentIDs").isNotEmpty()
+            }
+            .maxByOrNull { (_, data) -> data["updatedAt"] as? Timestamp ?: Timestamp(0, 0) }
+            ?.first
+            ?.let { return it }
+
+        return firestore.collection(FAMILY_GROUPS)
+            .whereArrayContains("teenIDs", teenId)
+            .get()
+            .await()
+            .documents
+            .map { it.id to it.data.orEmpty() }
+            .filter { (_, data) -> data.stringList("parentIDs").isNotEmpty() }
+            .maxByOrNull { (_, data) -> data["updatedAt"] as? Timestamp ?: Timestamp(0, 0) }
+            ?.first
+            .orEmpty()
     }
 
     suspend fun claimPairingToken(
@@ -335,6 +433,9 @@ class FirebaseAccountRepository(
 }
 
 private fun String.normalized(fallback: String): String = trim().ifBlank { fallback }
+
+private fun Map<String, Any?>.stringList(key: String): List<String> =
+    (this[key] as? List<*>).orEmpty().mapNotNull { it as? String }.filter { it.isNotBlank() }
 
 
 private fun AccountState.resetTeenCloudLinkIfStale(currentUserId: String): AccountState {

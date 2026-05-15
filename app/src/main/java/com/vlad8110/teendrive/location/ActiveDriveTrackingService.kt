@@ -122,6 +122,7 @@ class ActiveDriveTrackingService : Service() {
         if (teenProfileId.isBlank() || familyGroupId.isBlank()) return
         serviceScope.launch {
             runCatching {
+                ensureParentLinkedFamilyGroup()
                 activeDriveSyncRepository.publishActiveDrive(
                     snapshot = activeSnapshot,
                     teenId = teenProfileId,
@@ -136,6 +137,7 @@ class ActiveDriveTrackingService : Service() {
         if (teenProfileId.isBlank() || familyGroupId.isBlank()) return
         serviceScope.launch {
             runCatching {
+                ensureParentLinkedFamilyGroup()
                 activeDriveSyncRepository.clearActiveDrive(
                     teenId = teenProfileId,
                     familyGroupId = familyGroupId,
@@ -147,8 +149,9 @@ class ActiveDriveTrackingService : Service() {
     private fun publishParentSafetyAlerts(alerts: List<SafetyAlert>) {
         if (alerts.isEmpty() || teenProfileId.isBlank() || familyGroupId.isBlank()) return
         serviceScope.launch {
-            alerts.forEach { alert ->
-                runCatching {
+            runCatching {
+                ensureParentLinkedFamilyGroup()
+                alerts.forEach { alert ->
                     notificationEventRepository.writeParentSafetyAlertEvent(
                         alert = alert,
                         teenId = teenProfileId,
@@ -209,6 +212,7 @@ class ActiveDriveTrackingService : Service() {
 
     private suspend fun syncCompletedTripsIfCloudReady() {
         if (teenProfileId.isBlank() || familyGroupId.isBlank()) return
+        ensureParentLinkedFamilyGroup()
         tripSyncRepository.syncLocalTrips(
             accountState = AccountState(
                 hasSelectedRole = true,
@@ -218,6 +222,17 @@ class ActiveDriveTrackingService : Service() {
             ),
             tripRepository = tripRepository,
         )
+    }
+
+    private suspend fun ensureParentLinkedFamilyGroup() {
+        if (teenProfileId.isBlank() || familyGroupId.isBlank()) return
+        val resolvedFamilyGroupId = tripSyncRepository.resolveParentLinkedFamilyGroupId(
+            teenId = teenProfileId,
+            fallbackFamilyGroupId = familyGroupId,
+        )
+        if (resolvedFamilyGroupId.isNotBlank()) {
+            familyGroupId = resolvedFamilyGroupId
+        }
     }
 
     private fun buildNotification(): Notification {

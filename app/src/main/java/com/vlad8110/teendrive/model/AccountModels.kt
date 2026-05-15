@@ -42,11 +42,6 @@ data class ConnectedTeen(
     }
 }
 
-data class ConnectedParent(
-    val id: String,
-    val displayName: String,
-)
-
 data class PairingPayload(
     val code: String,
     val token: String,

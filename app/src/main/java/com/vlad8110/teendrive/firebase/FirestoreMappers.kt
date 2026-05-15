@@ -25,8 +25,8 @@ fun RoutePoint.toFirestoreMap(): Map<String, Any> =
     )
 
 fun routePointFromFirestore(data: Map<String, Any?>): RoutePoint? {
-    val latitude = data["latitude"] as? Double ?: return null
-    val longitude = data["longitude"] as? Double ?: return null
+    val latitude = data["latitude"].asDoubleOrNull() ?: return null
+    val longitude = data["longitude"].asDoubleOrNull() ?: return null
     val timestamp = (data["timestamp"] as? Timestamp)?.toInstant() ?: Instant.now()
     return RoutePoint(
         id = data["id"] as? String ?: java.util.UUID.randomUUID().toString(),
@@ -46,9 +46,9 @@ fun SpeedAlert.toFirestoreMap(): Map<String, Any> =
     )
 
 fun speedAlertFromFirestore(data: Map<String, Any?>): SpeedAlert? {
-    val speedMetersPerSecond = data["speedMetersPerSecond"] as? Double ?: return null
-    val latitude = data["latitude"] as? Double ?: return null
-    val longitude = data["longitude"] as? Double ?: return null
+    val speedMetersPerSecond = data["speedMetersPerSecond"].asDoubleOrNull() ?: return null
+    val latitude = data["latitude"].asDoubleOrNull() ?: return null
+    val longitude = data["longitude"].asDoubleOrNull() ?: return null
     val timestamp = (data["timestamp"] as? Timestamp)?.toInstant() ?: Instant.now()
     return SpeedAlert(
         id = data["id"] as? String ?: java.util.UUID.randomUUID().toString(),
@@ -78,9 +78,9 @@ fun safetyAlertFromFirestore(data: Map<String, Any?>): SafetyAlert? {
         id = data["id"] as? String ?: java.util.UUID.randomUUID().toString(),
         kind = kind,
         timestamp = timestamp,
-        speedMetersPerSecond = data["speedMetersPerSecond"] as? Double,
-        latitude = data["latitude"] as? Double,
-        longitude = data["longitude"] as? Double,
+        speedMetersPerSecond = data["speedMetersPerSecond"].asDoubleOrNull(),
+        latitude = data["latitude"].asDoubleOrNull(),
+        longitude = data["longitude"].asDoubleOrNull(),
         note = data["note"] as? String,
     )
 }
@@ -105,8 +105,8 @@ fun TeenTrip.toFirestoreMap(teenId: String, familyGroupId: String): Map<String, 
 fun teenTripFromFirestore(id: String, data: Map<String, Any?>): TeenTrip? {
     val startedAt = (data["startedAt"] as? Timestamp)?.toInstant() ?: return null
     val endedAt = (data["endedAt"] as? Timestamp)?.toInstant() ?: return null
-    val distanceMeters = data["distanceMeters"] as? Double ?: return null
-    val topSpeedMetersPerSecond = data["topSpeedMetersPerSecond"] as? Double ?: return null
+    val distanceMeters = data["distanceMeters"].asDoubleOrNull() ?: return null
+    val topSpeedMetersPerSecond = data["topSpeedMetersPerSecond"].asDoubleOrNull() ?: return null
     val speedAlerts = data.listOfMaps("speedAlerts").mapNotNull(::speedAlertFromFirestore)
     val safetyAlerts = data.listOfMaps("safetyAlerts").mapNotNull(::safetyAlertFromFirestore)
     val route = data.listOfMaps("route").mapNotNull(::routePointFromFirestore)
@@ -159,9 +159,9 @@ fun activeTeenDriveFromFirestore(
         teenName = teenName,
         startedAt = startedAt,
         updatedAt = updatedAt,
-        speedMetersPerSecond = data["speedMetersPerSecond"] as? Double ?: 0.0,
-        topSpeedMetersPerSecond = data["topSpeedMetersPerSecond"] as? Double ?: 0.0,
-        distanceMeters = data["distanceMeters"] as? Double ?: 0.0,
+        speedMetersPerSecond = data["speedMetersPerSecond"].asDoubleOrNull() ?: 0.0,
+        topSpeedMetersPerSecond = data["topSpeedMetersPerSecond"].asDoubleOrNull() ?: 0.0,
+        distanceMeters = data["distanceMeters"].asDoubleOrNull() ?: 0.0,
         alertCount = (data["alertCount"] as? Number)?.toInt() ?: 0,
         lastKnownLocation = lastKnownLocation,
         safetyAlerts = data.listOfMaps("safetyAlerts").mapNotNull(::safetyAlertFromFirestore),
@@ -197,3 +197,6 @@ private fun Map<String, Any?>.listOfMaps(key: String): List<Map<String, Any?>> =
             (item as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value }
         }
         ?: emptyList()
+
+private fun Any?.asDoubleOrNull(): Double? =
+    (this as? Number)?.toDouble()

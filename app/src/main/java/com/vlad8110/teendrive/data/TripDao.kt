@@ -1,7 +1,6 @@
 package com.vlad8110.teendrive.data
 
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -25,10 +24,6 @@ interface TripDao {
     fun observeTrips(): Flow<List<TripWithDetails>>
 
     @Transaction
-    @Query("SELECT * FROM completed_trips WHERE id = :tripId")
-    suspend fun getTrip(tripId: String): TripWithDetails?
-
-    @Transaction
     @Query("SELECT * FROM completed_trips WHERE syncedAtEpochMillis IS NULL ORDER BY startedAtEpochMillis ASC")
     suspend fun unsyncedTrips(): List<TripWithDetails>
 
@@ -44,9 +39,6 @@ interface TripDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSafetyAlerts(alerts: List<SafetyAlertEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertTombstone(tombstone: DeletedTripTombstoneEntity)
-
     @Transaction
     suspend fun upsertTripWithDetails(
         trip: TripEntity,
@@ -60,12 +52,6 @@ interface TripDao {
         upsertSafetyAlerts(safetyAlerts)
     }
 
-    @Query("DELETE FROM completed_trips WHERE id = :tripId")
-    suspend fun deleteTripById(tripId: String)
-
-    @Query("DELETE FROM completed_trips")
-    suspend fun deleteAllTrips()
-
     @Query("SELECT * FROM deleted_trip_tombstones WHERE syncedAtEpochMillis IS NULL")
     suspend fun unsyncedTombstones(): List<DeletedTripTombstoneEntity>
 
@@ -74,7 +60,4 @@ interface TripDao {
 
     @Query("UPDATE deleted_trip_tombstones SET syncedAtEpochMillis = :syncedAtEpochMillis WHERE tripId = :tripId")
     suspend fun markTombstoneSynced(tripId: String, syncedAtEpochMillis: Long)
-
-    @Delete
-    suspend fun deleteTombstone(tombstone: DeletedTripTombstoneEntity)
 }

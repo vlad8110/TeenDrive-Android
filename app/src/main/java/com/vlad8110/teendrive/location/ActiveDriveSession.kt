@@ -90,7 +90,7 @@ object ActiveDriveSessionStore {
             currentSpeedMetersPerSecond = location.speedMetersPerSecond,
             speedLimitMetersPerSecond = location.speedLimitMetersPerSecond ?: current.speedLimitMetersPerSecond,
             phoneUnlockedWhileMoving = location.phoneUnlockedWhileMoving,
-            savedPlaces = savedPlaces,
+            savedPlaces = emptyList(),
             arrivedPlaceIds = current.arrivedPlaceIds,
         )
         val rawDetectedAlerts = SafetyDetector.detect(detectionInput)
@@ -137,11 +137,6 @@ object ActiveDriveSessionStore {
         return completed
     }
 
-    private var savedPlaces: List<SavedPlace> = emptyList()
-
-    fun setSavedPlaces(places: List<SavedPlace>) {
-        savedPlaces = places
-    }
 }
 
 private fun ActiveDriveSnapshot.hasRecentAlert(alert: SafetyAlert): Boolean =

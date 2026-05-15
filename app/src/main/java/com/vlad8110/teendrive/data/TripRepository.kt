@@ -33,17 +33,6 @@ class TripRepository(
         return trip
     }
 
-    suspend fun deleteTrip(tripId: String, deletedAt: Instant = Instant.now()) {
-        tripDao.upsertTombstone(
-            DeletedTripTombstoneEntity(
-                tripId = tripId,
-                deletedAtEpochMillis = deletedAt.toEpochMilli(),
-                syncedAtEpochMillis = null,
-            ),
-        )
-        tripDao.deleteTripById(tripId)
-    }
-
     suspend fun markTripSynced(tripId: String, syncedAt: Instant = Instant.now()) {
         tripDao.markTripSynced(tripId, syncedAt.toEpochMilli())
     }

@@ -66,10 +66,6 @@ class AccountPreferences(private val context: Context) {
         }
     }
 
-    suspend fun clear() {
-        context.accountDataStore.edit { it.clear() }
-    }
-
     private object Keys {
         val hasSelectedRole = booleanPreferencesKey("has_selected_role")
         val selectedRole = stringPreferencesKey("selected_role")

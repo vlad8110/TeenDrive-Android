@@ -4,14 +4,6 @@ import java.time.Duration
 import java.time.Instant
 import kotlin.math.max
 
-data class FamilyGroup(
-    val id: String,
-    val parentIds: List<String>,
-    val teenIds: List<String>,
-    val createdAt: Instant,
-    val updatedAt: Instant,
-)
-
 data class TeenProfile(
     val id: String,
     val familyGroupId: String,
